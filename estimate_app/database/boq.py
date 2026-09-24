@@ -40,6 +40,7 @@ class BOQItem:
     catalogue_item_id: int | None = None
     catalogue_version_id: int | None = None
     manual_override_reason: str | None = None
+    needs_catalogue_review: bool = False
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,7 @@ class BOQRepository:
             item.catalogue_item_id,
             item.catalogue_version_id,
             item.manual_override_reason,
+            int(item.needs_catalogue_review),
         )
         if item.id is None:
             cursor = self.connection.execute(
@@ -116,8 +118,8 @@ class BOQRepository:
                     project_id, serial_number, work_section, dsr_item_code,
                     description, unit, quantity_type, rate, rate_source,
                     verification_status, catalogue_item_id, catalogue_version_id,
-                    manual_override_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    manual_override_reason, needs_catalogue_review
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values,
             )
@@ -131,6 +133,7 @@ class BOQRepository:
                     quantity_type = ?, rate = ?, rate_source = ?,
                     verification_status = ?, catalogue_item_id = ?,
                     catalogue_version_id = ?, manual_override_reason = ?,
+                    needs_catalogue_review = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
@@ -257,6 +260,7 @@ class BOQRepository:
             catalogue_item_id=row["catalogue_item_id"],
             catalogue_version_id=row["catalogue_version_id"],
             manual_override_reason=row["manual_override_reason"],
+            needs_catalogue_review=bool(row["needs_catalogue_review"]),
         )
 
     @staticmethod

@@ -18,6 +18,26 @@ Catalogue verification is a separate review action requiring reviewer and verifi
 
 Selecting a verified item copies its description, canonical unit, rate, source page, and catalogue reference into the BOQ snapshot. Later catalogue changes do not silently alter existing estimates. `Review rate updates` provides an explicit comparison before applying a corrected snapshot. Editing a selected rate requires a reason and changes its status to `Manual override`.
 
+Catalogue and correction verification can be withdrawn with an auditable reviewer/date/reason event. Withdrawn records are excluded from future selections. Existing BOQ snapshots retain their saved values and receive a review flag.
+
+Local PDF references are copied outside the repository to `%LOCALAPPDATA%\\BuildingEstimate\\reference_documents` on Windows or `~/.local/share/BuildingEstimate/reference_documents` on Linux (or the configured XDG data directory). The database retains the document name and SHA-256 checksum. Missing files produce an explicit error.
+
+### CSV headers
+
+Base catalogue imports require this exact header order:
+
+```text
+schedule_name,edition,volume,chapter,item_code,parent_item_code,description,original_unit,canonical_unit,rate,source_document_name,source_page,is_heading
+```
+
+Correction-slip imports are also implemented and require this exact header order:
+
+```text
+slip_reference,publication_date,effective_date,effective_date_source,item_code,operation,changed_parent_item_code,changed_description,changed_original_unit,changed_canonical_unit,changed_rate,changed_volume,changed_chapter,source_document_name,source_page
+```
+
+Correction imports create unverified draft records. They do not affect rate selection until explicitly verified. CSV validation does not verify source documents.
+
 ## BOQ calculation rules
 
 Dimensional inputs use metres. A measurement's quantity is calculated as:

@@ -13,6 +13,8 @@
 - Catalogue imports are UTF-8 CSV only, start as `Unverified`, and require explicit reviewer verification with source information before selection in a BOQ.
 - Keep original DSR entries immutable. Correction slips are separate records and only verified slips effective on or before the project's cutoff date may resolve an item. Conflicting corrections are blocked; precedence must never be guessed.
 - A selected catalogue rate is copied into the BOQ as a provenance snapshot. Later imports or corrections must not silently change existing estimates. Rate changes require explicit review; unit changes require measurement review.
+- Verification can be withdrawn with a reviewer, date, and reason. Withdrawn records are excluded from new selections, while existing BOQ snapshots retain their saved values and are flagged for review.
+- Local source PDFs are copied to the per-user `reference_documents` directory outside the repository and tracked by document name and SHA-256 checksum. Missing files must be reported rather than silently ignored.
 - A separate materials abstract, taxes, contingencies, and report export are intentionally deferred to later steps.
 
 The actual CPWD DSR PDFs and correction slips have not been supplied to this Codespace. The application does not claim the catalogue is complete or up to date. Synthetic fixtures used by tests are never presented as verified CPWD data.

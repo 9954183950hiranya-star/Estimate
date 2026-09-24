@@ -17,3 +17,4 @@ dist/
 *.sqlite3-shm
 *.sqlite3-wal
 test-results/
+reference_documents/

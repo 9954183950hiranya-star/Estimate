@@ -140,11 +140,44 @@ def initialise(connection: sqlite3.Connection) -> None:
             UNIQUE(slip_reference, item_code, operation)
         );
         CREATE INDEX IF NOT EXISTS idx_corrections_item ON correction_slips(item_code, effective_date);
+        CREATE TABLE IF NOT EXISTS verification_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_type TEXT NOT NULL,
+            record_id INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            reviewer TEXT NOT NULL,
+            event_date TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS reference_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_name TEXT NOT NULL,
+            stored_path TEXT NOT NULL,
+            source_checksum TEXT NOT NULL UNIQUE,
+            added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS correction_imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_file_name TEXT NOT NULL,
+            source_checksum TEXT NOT NULL UNIQUE,
+            imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            row_count INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            error_summary TEXT
+        );
         """
     )
     _add_column_if_missing(connection, "boq_items", "catalogue_item_id", "INTEGER")
     _add_column_if_missing(connection, "boq_items", "catalogue_version_id", "INTEGER")
     _add_column_if_missing(connection, "boq_items", "manual_override_reason", "TEXT")
+    _add_column_if_missing(connection, "boq_items", "needs_catalogue_review", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(connection, "catalogue_items", "verification_withdrawn_by", "TEXT")
+    _add_column_if_missing(connection, "catalogue_items", "verification_withdrawn_date", "TEXT")
+    _add_column_if_missing(connection, "catalogue_items", "verification_withdrawal_reason", "TEXT")
+    _add_column_if_missing(connection, "correction_slips", "verification_withdrawn_by", "TEXT")
+    _add_column_if_missing(connection, "correction_slips", "verification_withdrawn_date", "TEXT")
+    _add_column_if_missing(connection, "correction_slips", "verification_withdrawal_reason", "TEXT")
     connection.execute("PRAGMA user_version = 3")
     connection.commit()
 

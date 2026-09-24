@@ -11,6 +11,7 @@ from estimate_app.calculation.decimal_policy import MeasurementType
 from estimate_app.database.boq import BOQItem, BOQRepository
 from estimate_app.database.catalogue import (
     CATALOGUE_HEADERS,
+    CORRECTION_HEADERS,
     VERIFIED,
     CatalogueImportError,
     CatalogueRepository,
@@ -180,3 +181,23 @@ def test_existing_boq_snapshot_does_not_change_after_catalogue_update(tmp_path: 
     correction = catalogue.add_correction(CorrectionSlip(None, "CS-SNAPSHOT", "2024-01-01", "2024-02-01", "source", "7.1", "amend", "slip.pdf", 5, changed_rate=Decimal("999")))
     catalogue.verify_correction(correction.id, "Reviewer", "2024-03-01")
     assert boq.get_item(snapshot.id).rate == Decimal("100.00")
+
+
+def test_correction_csv_import_is_unverified_and_repeat_safe(tmp_path: Path) -> None:
+    repository = make_repository(tmp_path)
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=CORRECTION_HEADERS, lineterminator="\n")
+    writer.writeheader()
+    writer.writerow({
+        "slip_reference": "CSV-CS-1", "publication_date": "2026-01-01", "effective_date": "2026-02-01",
+        "effective_date_source": "synthetic correction p. 1", "item_code": "CSV-1", "operation": "add",
+        "changed_parent_item_code": "", "changed_description": "CSV added item", "changed_original_unit": "cum",
+        "changed_canonical_unit": "cum", "changed_rate": "25.00", "changed_volume": "Volume 1",
+        "changed_chapter": "Concrete", "source_document_name": "synthetic-correction.csv", "source_page": "1",
+    })
+    content = output.getvalue()
+    first = repository.import_correction_csv(io.StringIO(content), "corrections.csv")
+    repeated = repository.import_correction_csv(io.StringIO(content), "other-name.csv")
+    assert first.id == repeated.id
+    assert repository.list_corrections()[0].verification_status == "Unverified"
+    assert repository.search(query="CSV-1", cutoff_date="2026-12-31") == []

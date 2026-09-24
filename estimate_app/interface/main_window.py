@@ -24,6 +24,7 @@ from estimate_app.database.projects import Project, ProjectRepository
 from estimate_app.database.boq import BOQRepository
 from estimate_app.database.catalogue import CatalogueRepository
 from estimate_app.interface.boq_editor import BOQEditor
+from estimate_app.interface.review_dialogs import CatalogueReviewDialog, CorrectionReviewDialog
 
 
 class MainWindow(QMainWindow):
@@ -46,10 +47,16 @@ class MainWindow(QMainWindow):
 
         new_button = QPushButton("New Project")
         new_button.clicked.connect(self._new_project)
+        catalogue_review_button = QPushButton("Catalogue review")
+        catalogue_review_button.clicked.connect(self._open_catalogue_review)
+        correction_review_button = QPushButton("Correction-slip review")
+        correction_review_button.clicked.connect(self._open_correction_review)
         list_layout = QVBoxLayout()
         list_layout.addWidget(QLabel("Projects"))
         list_layout.addWidget(self.project_list)
         list_layout.addWidget(new_button)
+        list_layout.addWidget(catalogue_review_button)
+        list_layout.addWidget(correction_review_button)
         list_panel = QWidget()
         list_panel.setLayout(list_layout)
 
@@ -184,3 +191,11 @@ class MainWindow(QMainWindow):
             if item.data(Qt.ItemDataRole.UserRole) == project_id:
                 self.project_list.setCurrentItem(item)
                 return
+
+    def _open_catalogue_review(self) -> None:
+        dialog = CatalogueReviewDialog(self.catalogue_repository, self)
+        dialog.exec()
+
+    def _open_correction_review(self) -> None:
+        dialog = CorrectionReviewDialog(self.catalogue_repository, self)
+        dialog.exec()

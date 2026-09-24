@@ -3,7 +3,10 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import os
+import shutil
 import sqlite3
+import subprocess
 from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
@@ -17,6 +20,8 @@ CATALOGUE_SCHEDULE = "CPWD DSR Civil"
 CATALOGUE_EDITION = "2023"
 VERIFIED = "Verified"
 UNVERIFIED = "Unverified"
+WITHDRAWN = "Withdrawn"
+SUPERSEDED = "Superseded"
 MANUAL_OVERRIDE = "Manual override"
 CATALOGUE_HEADERS = (
     "schedule_name",
@@ -32,6 +37,23 @@ CATALOGUE_HEADERS = (
     "source_document_name",
     "source_page",
     "is_heading",
+)
+CORRECTION_HEADERS = (
+    "slip_reference",
+    "publication_date",
+    "effective_date",
+    "effective_date_source",
+    "item_code",
+    "operation",
+    "changed_parent_item_code",
+    "changed_description",
+    "changed_original_unit",
+    "changed_canonical_unit",
+    "changed_rate",
+    "changed_volume",
+    "changed_chapter",
+    "source_document_name",
+    "source_page",
 )
 
 
@@ -54,6 +76,9 @@ class CatalogueItem:
     reviewer: str | None = None
     verification_date: str | None = None
     is_heading: bool = False
+    verification_withdrawn_by: str | None = None
+    verification_withdrawn_date: str | None = None
+    verification_withdrawal_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +102,9 @@ class CorrectionSlip:
     verification_status: str = UNVERIFIED
     reviewer: str | None = None
     verification_date: str | None = None
+    verification_withdrawn_by: str | None = None
+    verification_withdrawn_date: str | None = None
+    verification_withdrawal_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +132,14 @@ class CatalogueImportPreview:
     errors: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class CorrectionImportPreview:
+    source_file_name: str
+    source_checksum: str
+    rows: tuple[CorrectionSlip, ...]
+    errors: tuple[str, ...]
+
+
 class CatalogueImportError(ValueError):
     def __init__(self, errors: list[str]) -> None:
         self.errors = errors
@@ -117,6 +153,12 @@ class ConflictingCorrectionsError(ValueError):
 def blank_catalogue_template() -> str:
     output = io.StringIO()
     csv.writer(output, lineterminator="\n").writerow(CATALOGUE_HEADERS)
+    return output.getvalue()
+
+
+def blank_correction_template() -> str:
+    output = io.StringIO()
+    csv.writer(output, lineterminator="\n").writerow(CORRECTION_HEADERS)
     return output.getvalue()
 
 
@@ -169,6 +211,151 @@ class CatalogueRepository:
             "SELECT * FROM catalogue_imports WHERE id = ?", (history_id,)
         ).fetchone()
         return self._history_from_row(row)
+
+    def import_correction_csv(self, source: Path | str | TextIO, source_file_name: str | None = None) -> ImportHistory:
+        preview = self.preview_correction_csv(source, source_file_name)
+        if preview.errors:
+            raise CatalogueImportError(list(preview.errors))
+        existing = self.connection.execute(
+            "SELECT * FROM correction_imports WHERE source_checksum = ?", (preview.source_checksum,)
+        ).fetchone()
+        if existing and existing["status"] == "Imported":
+            return ImportHistory(existing["id"], existing["source_file_name"], existing["source_checksum"], existing["row_count"], existing["status"], existing["error_summary"])
+        try:
+            with self.connection:
+                for correction in preview.rows:
+                    self.connection.execute(
+                        """
+                        INSERT INTO correction_slips (
+                            slip_reference, publication_date, effective_date, effective_date_source,
+                            item_code, operation, changed_parent_item_code, changed_description,
+                            changed_original_unit, changed_canonical_unit, changed_rate,
+                            changed_volume, changed_chapter, source_document_name, source_page,
+                            verification_status
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            correction.slip_reference, correction.publication_date, correction.effective_date,
+                            correction.effective_date_source, correction.item_code, correction.operation,
+                            correction.changed_parent_item_code, correction.changed_description,
+                            correction.changed_original_unit, correction.changed_canonical_unit,
+                            decimal_to_text(correction.changed_rate), correction.changed_volume,
+                            correction.changed_chapter, correction.source_document_name,
+                            correction.source_page, UNVERIFIED,
+                        ),
+                    )
+                cursor = self.connection.execute(
+                    "INSERT INTO correction_imports (source_file_name, source_checksum, row_count, status) VALUES (?, ?, ?, 'Imported')",
+                    (preview.source_file_name, preview.source_checksum, len(preview.rows)),
+                )
+                import_id = cursor.lastrowid
+        except sqlite3.Error as error:
+            raise CatalogueImportError([str(error)]) from error
+        return ImportHistory(import_id, preview.source_file_name, preview.source_checksum, len(preview.rows), "Imported", None)
+
+    def preview_correction_csv(self, source: Path | str | TextIO, source_file_name: str | None = None) -> CorrectionImportPreview:
+        raw, file_name = self._read_source(source, source_file_name)
+        checksum = hashlib.sha256(raw).hexdigest()
+        try:
+            text = raw.decode("utf-8-sig")
+            reader = csv.DictReader(io.StringIO(text))
+            if reader.fieldnames != list(CORRECTION_HEADERS):
+                raise CatalogueImportError(["CSV headers must be exactly: " + ", ".join(CORRECTION_HEADERS)])
+            rows: list[CorrectionSlip] = []
+            errors: list[str] = []
+            seen: set[tuple[str, str, str]] = set()
+            for row_number, row in enumerate(reader, 2):
+                try:
+                    required = ["slip_reference", "publication_date", "effective_date", "effective_date_source", "item_code", "operation", "source_document_name", "source_page"]
+                    missing = [field for field in required if not row.get(field, "").strip()]
+                    if missing:
+                        raise ValueError("missing " + ", ".join(missing))
+                    self._validate_date(row["publication_date"], "publication date")
+                    self._validate_date(row["effective_date"], "effective date")
+                    if row["operation"] not in {"add", "amend", "delete"}:
+                        raise ValueError("operation must be add, amend, or delete")
+                    source_page = int(row["source_page"])
+                    if source_page < 1:
+                        raise ValueError("source_page must be positive")
+                    correction = CorrectionSlip(
+                        None, row["slip_reference"].strip(), row["publication_date"].strip(), row["effective_date"].strip(),
+                        row["effective_date_source"].strip(), row["item_code"].strip(), row["operation"].strip(),
+                        row["source_document_name"].strip(), source_page,
+                        row.get("changed_parent_item_code", "").strip() or None,
+                        row.get("changed_description", "").strip() or None,
+                        row.get("changed_original_unit", "").strip() or None,
+                        row.get("changed_canonical_unit", "").strip() or None,
+                        decimal_from_text(row.get("changed_rate", "").strip(), "changed rate"),
+                        row.get("changed_volume", "").strip() or None,
+                        row.get("changed_chapter", "").strip() or None,
+                    )
+                    key = (correction.slip_reference, correction.item_code, correction.operation)
+                    if key in seen:
+                        raise ValueError("duplicate correction record")
+                    seen.add(key)
+                    rows.append(correction)
+                except (ValueError, TypeError) as error:
+                    errors.append(f"row {row_number}: {error}")
+            if errors:
+                return CorrectionImportPreview(file_name, checksum, tuple(), tuple(errors))
+            return CorrectionImportPreview(file_name, checksum, tuple(rows), tuple())
+        except UnicodeDecodeError as error:
+            return CorrectionImportPreview(file_name, checksum, tuple(), (f"file is not valid UTF-8: {error}",))
+        except CatalogueImportError as error:
+            return CorrectionImportPreview(file_name, checksum, tuple(), tuple(error.errors))
+
+    def reference_documents_directory(self) -> Path:
+        from estimate_app.database.connection import user_data_directory
+
+        directory = user_data_directory() / "reference_documents"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def attach_reference_document(self, source: Path | str) -> sqlite3.Row:
+        source_path = Path(source)
+        if source_path.suffix.lower() != ".pdf":
+            raise ValueError("Reference document must be a PDF file.")
+        if not source_path.is_file():
+            raise FileNotFoundError(f"Reference PDF was not found: {source_path}")
+        checksum = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        existing = self.connection.execute("SELECT * FROM reference_documents WHERE source_checksum = ?", (checksum,)).fetchone()
+        if existing:
+            return existing
+        stored_path = self.reference_documents_directory() / f"{checksum[:16]}-{source_path.name}"
+        shutil.copy2(source_path, stored_path)
+        cursor = self.connection.execute(
+            "INSERT INTO reference_documents (document_name, stored_path, source_checksum) VALUES (?, ?, ?)",
+            (source_path.name, str(stored_path), checksum),
+        )
+        self.connection.commit()
+        return self.connection.execute("SELECT * FROM reference_documents WHERE id = ?", (cursor.lastrowid,)).fetchone()
+
+    def open_reference_document(self, document_id: int) -> Path:
+        row = self.connection.execute("SELECT * FROM reference_documents WHERE id = ?", (document_id,)).fetchone()
+        if row is None:
+            raise FileNotFoundError("Reference document record does not exist.")
+        path = Path(row["stored_path"])
+        if not path.is_file():
+            raise FileNotFoundError(f"Reference PDF is missing: {path}")
+        if os.name == "nt":
+            os.startfile(path)  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return path
+
+    def list_reference_documents(self) -> list[sqlite3.Row]:
+        return self.connection.execute(
+            "SELECT * FROM reference_documents ORDER BY document_name"
+        ).fetchall()
+
+    def open_reference_document_by_name(self, document_name: str) -> Path:
+        row = self.connection.execute(
+            "SELECT * FROM reference_documents WHERE document_name = ? ORDER BY id DESC LIMIT 1",
+            (document_name,),
+        ).fetchone()
+        if row is None:
+            raise FileNotFoundError(f"Reference PDF is not attached: {document_name}")
+        return self.open_reference_document(row["id"])
 
     def preview_csv(self, source: Path | str | TextIO, source_file_name: str | None = None) -> CatalogueImportPreview:
         raw, file_name = self._read_source(source, source_file_name)
@@ -273,6 +460,11 @@ class CatalogueRepository:
         self._validate_date(verification_date, "verification date")
         if not reviewer.strip():
             raise ValueError("Reviewer is required for verification.")
+        item = self.get_item(item_id)
+        if item is None:
+            raise ValueError("Catalogue item does not exist.")
+        if not item.source_document_name.strip() or item.source_page < 1:
+            raise ValueError("Source document and positive source page are required for verification.")
         self.connection.execute(
             """
             UPDATE catalogue_items
@@ -281,11 +473,51 @@ class CatalogueRepository:
             """,
             (VERIFIED, reviewer.strip(), verification_date, item_id),
         )
+        self._record_event("catalogue_item", item_id, VERIFIED, reviewer, verification_date)
         self.connection.commit()
         item = self.get_item(item_id)
         if item is None:
             raise ValueError("Catalogue item does not exist.")
         return item
+
+    def withdraw_item(self, item_id: int, reviewer: str, withdrawal_date: str, reason: str) -> CatalogueItem:
+        self._validate_date(withdrawal_date, "withdrawal date")
+        if not reviewer.strip() or not reason.strip():
+            raise ValueError("Reviewer and withdrawal reason are required.")
+        item = self.get_item(item_id)
+        if item is None:
+            raise ValueError("Catalogue item does not exist.")
+        self.connection.execute(
+            """
+            UPDATE catalogue_items
+            SET verification_status = ?, verification_withdrawn_by = ?,
+                verification_withdrawn_date = ?, verification_withdrawal_reason = ?
+            WHERE id = ?
+            """,
+            (WITHDRAWN, reviewer.strip(), withdrawal_date, reason.strip(), item_id),
+        )
+        self._record_event("catalogue_item", item_id, WITHDRAWN, reviewer, withdrawal_date, reason)
+        self.connection.execute(
+            "UPDATE boq_items SET needs_catalogue_review = 1 WHERE catalogue_item_id = ?",
+            (item_id,),
+        )
+        self.connection.commit()
+        return self.get_item(item_id)  # type: ignore[return-value]
+
+    def list_review_items(self, status: str = "") -> list[CatalogueItem]:
+        if status:
+            rows = self.connection.execute(
+                "SELECT * FROM catalogue_items WHERE verification_status = ? ORDER BY item_code", (status,)
+            ).fetchall()
+        else:
+            rows = self.connection.execute("SELECT * FROM catalogue_items ORDER BY item_code").fetchall()
+        return [self._item_from_row(row) for row in rows]
+
+    def verification_events(self, record_type: str, record_id: int) -> list[sqlite3.Row]:
+        return self.connection.execute(
+            "SELECT * FROM verification_events WHERE record_type = ? AND record_id = ? ORDER BY id",
+            (record_type, record_id),
+        ).fetchall()
 
     def add_correction(self, correction: CorrectionSlip) -> CorrectionSlip:
         self._validate_date(correction.publication_date, "publication date")
@@ -333,15 +565,59 @@ class CatalogueRepository:
         self._validate_date(verification_date, "verification date")
         if not reviewer.strip():
             raise ValueError("Reviewer is required for verification.")
+        correction = next((item for item in self.list_corrections() if item.id == correction_id), None)
+        if correction is None:
+            raise ValueError("Correction slip does not exist.")
+        if not correction.source_document_name.strip() or correction.source_page < 1:
+            raise ValueError("Source document and positive source page are required for verification.")
         self.connection.execute(
             "UPDATE correction_slips SET verification_status = ?, reviewer = ?, verification_date = ? WHERE id = ?",
             (VERIFIED, reviewer.strip(), verification_date, correction_id),
         )
+        self._record_event("correction_slip", correction_id, VERIFIED, reviewer, verification_date)
         self.connection.commit()
         row = self.connection.execute("SELECT * FROM correction_slips WHERE id = ?", (correction_id,)).fetchone()
         if row is None:
             raise ValueError("Correction slip does not exist.")
         return self._correction_from_row(row)
+
+    def withdraw_correction(self, correction_id: int, reviewer: str, withdrawal_date: str, reason: str) -> CorrectionSlip:
+        self._validate_date(withdrawal_date, "withdrawal date")
+        if not reviewer.strip() or not reason.strip():
+            raise ValueError("Reviewer and withdrawal reason are required.")
+        correction = next((item for item in self.list_corrections() if item.id == correction_id), None)
+        if correction is None:
+            raise ValueError("Correction slip does not exist.")
+        self.connection.execute(
+            """
+            UPDATE correction_slips
+            SET verification_status = ?, verification_withdrawn_by = ?,
+                verification_withdrawn_date = ?, verification_withdrawal_reason = ?
+            WHERE id = ?
+            """,
+            (WITHDRAWN, reviewer.strip(), withdrawal_date, reason.strip(), correction_id),
+        )
+        self._record_event("correction_slip", correction_id, WITHDRAWN, reviewer, withdrawal_date, reason)
+        self.connection.execute(
+            "UPDATE boq_items SET needs_catalogue_review = 1 WHERE dsr_item_code = ?",
+            (correction.item_code,),
+        )
+        self.connection.commit()
+        row = self.connection.execute("SELECT * FROM correction_slips WHERE id = ?", (correction_id,)).fetchone()
+        return self._correction_from_row(row)
+
+    def revise_correction(self, correction_id: int, replacement: CorrectionSlip) -> CorrectionSlip:
+        current = next((item for item in self.list_corrections() if item.id == correction_id), None)
+        if current is None:
+            raise ValueError("Correction slip does not exist.")
+        self.connection.execute(
+            "UPDATE correction_slips SET verification_status = ? WHERE id = ?",
+            (SUPERSEDED, correction_id),
+        )
+        created = self.add_correction(replace(replacement, id=None, verification_status=UNVERIFIED))
+        self._record_event("correction_slip", correction_id, SUPERSEDED, "system", replacement.publication_date, f"Replaced by correction {created.id}")
+        self.connection.commit()
+        return created
 
     def list_corrections(self, item_code: str | None = None) -> list[CorrectionSlip]:
         if item_code is None:
@@ -407,6 +683,24 @@ class CatalogueRepository:
             "last_source_page": row["last_page"],
             "coverage_note": "Recorded imports only; this is not a claim that the catalogue is up to date.",
         }
+
+    def _record_event(
+        self,
+        record_type: str,
+        record_id: int,
+        action: str,
+        reviewer: str,
+        event_date: str,
+        reason: str | None = None,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO verification_events
+            (record_type, record_id, action, reviewer, event_date, reason)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (record_type, record_id, action, reviewer, event_date, reason),
+        )
 
     def _validate_csv(self, raw: bytes) -> list[CatalogueItem]:
         try:
@@ -530,6 +824,8 @@ class CatalogueRepository:
             decimal_from_text(row["original_rate"], "rate"), row["source_document_name"],
             row["source_page"], row["verification_status"], row["reviewer"],
             row["verification_date"], bool(row["is_heading"]),
+            row["verification_withdrawn_by"], row["verification_withdrawn_date"],
+            row["verification_withdrawal_reason"],
         )
 
     @staticmethod
@@ -545,6 +841,8 @@ class CatalogueRepository:
             row["changed_description"], row["changed_original_unit"], row["changed_canonical_unit"],
             decimal_from_text(row["changed_rate"], "changed rate"), row["changed_volume"],
             row["changed_chapter"], row["verification_status"], row["reviewer"], row["verification_date"],
+            row["verification_withdrawn_by"], row["verification_withdrawn_date"],
+            row["verification_withdrawal_reason"],
         )
 
     @staticmethod

@@ -202,7 +202,8 @@ class BOQEditor(QWidget):
         summary = self.repository.summary(item.id) if item.id is not None else None
         quantity = "Measurements required" if summary is None or summary.totals is None else f"{summary.totals.displayed_quantity:.3f}"
         amount = "" if summary is None or summary.amount is None else f"₹{summary.amount:.2f}"
-        values = [str(item.serial_number), item.work_section, item.dsr_item_code, item.description, item.unit, quantity, "" if item.rate is None else f"₹{item.rate:.2f}", amount, item.verification_status]
+        status = "Needs catalogue review" if item.needs_catalogue_review else item.verification_status
+        values = [str(item.serial_number), item.work_section, item.dsr_item_code, item.description, item.unit, quantity, "" if item.rate is None else f"₹{item.rate:.2f}", amount, status]
         for column, value in enumerate(values):
             self.item_table.setItem(row, column, QTableWidgetItem(value))
         self.item_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, item.id)
