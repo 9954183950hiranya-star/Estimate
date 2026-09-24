@@ -6,7 +6,17 @@ Offline Windows desktop foundation for preparing building civil engineering esti
 
 The application provides a PySide6 window for creating, saving, and reopening building projects. The `BOQ and measurements` tab supports BOQ item editing, manual development rates, reordering, deletion, and detailed volume, area, length, count, and direct-quantity measurements. It stores SQLite data in the per-user application-data directory, not in the source or installation directory.
 
-Manual rates are labelled `Unverified manual rate`. This step contains no CPWD DSR catalogue or invented CPWD rates. Rate import, estimate revisions, materials abstracts, taxes, contingencies, and report export are deferred.
+Manual rates are labelled `Unverified manual rate`. The catalogue workflow accepts UTF-8 CSV records but this repository contains no real CPWD DSR PDF or correction-slip data. Imported records start as `Unverified` and cannot be selected as verified DSR rates until a reviewer records verification and source details. Rate revisions, materials abstracts, taxes, contingencies, and report export are deferred.
+
+## Catalogue workflow
+
+From a project's `BOQ and measurements` tab, choose `Select verified DSR item`. The catalogue dialog searches item code and description and filters by volume, chapter, and canonical unit. It shows original/corrected rates, source pages, and verification status. Only verified priced records applicable to the project's correction-slip cutoff can be selected.
+
+The dialog can export a blank CSV template and preview a UTF-8 import before committing it. Validation includes required fields, Decimal-compatible rates, positive source pages, heading/priced-item rules, duplicate codes, and conflicts with existing records. Imports are transactional and recorded with a SHA-256 checksum, so repeating the same content is safe. Failed imports leave the database unchanged.
+
+Catalogue verification is a separate review action requiring reviewer and verification date. Correction slips remain separate from original catalogue entries and carry publication/effective dates, effective-date evidence, operation, source page, and verification details. Verified corrections effective on or before the project's cutoff are applied in date order; same-date conflicts are blocked. The coverage message reports recorded/verified records only and does not claim the catalogue is up to date.
+
+Selecting a verified item copies its description, canonical unit, rate, source page, and catalogue reference into the BOQ snapshot. Later catalogue changes do not silently alter existing estimates. `Review rate updates` provides an explicit comparison before applying a corrected snapshot. Editing a selected rate requires a reason and changes its status to `Manual override`.
 
 ## BOQ calculation rules
 

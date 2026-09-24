@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from estimate_app.database.projects import Project, ProjectRepository
 from estimate_app.database.boq import BOQRepository
+from estimate_app.database.catalogue import CatalogueRepository
 from estimate_app.interface.boq_editor import BOQEditor
 
 
@@ -30,6 +31,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.repository = repository
         self.boq_repository = BOQRepository(repository.connection)
+        self.catalogue_repository = CatalogueRepository(repository.connection)
         self.current_project_id: int | None = None
         self.setWindowTitle("Building Estimate — CPWD DSR 2023")
         self.resize(1000, 620)
@@ -71,7 +73,7 @@ class MainWindow(QMainWindow):
 
         form_panel = QWidget()
         form_panel.setLayout(form)
-        self.boq_editor = BOQEditor(self.boq_repository)
+        self.boq_editor = BOQEditor(self.boq_repository, self.catalogue_repository)
         tabs = QTabWidget()
         tabs.addTab(form_panel, "Project")
         tabs.addTab(self.boq_editor, "BOQ and measurements")
@@ -126,7 +128,7 @@ class MainWindow(QMainWindow):
         self.client_department.setText(project.client_department)
         self.estimate_date.setDate(QDate.fromString(project.estimate_date, Qt.DateFormat.ISODate))
         self.cutoff_date.setDate(QDate.fromString(project.correction_slip_cutoff_date, Qt.DateFormat.ISODate))
-        self.boq_editor.set_project(project.id)
+        self.boq_editor.set_project(project.id, project.correction_slip_cutoff_date)
 
     def _save_project(self) -> None:
         fields = {

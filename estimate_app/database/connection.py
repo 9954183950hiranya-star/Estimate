@@ -84,7 +84,74 @@ def initialise(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_boq_items_project ON boq_items(project_id, serial_number);
         CREATE INDEX IF NOT EXISTS idx_measurements_item ON measurements(boq_item_id, id);
+        CREATE TABLE IF NOT EXISTS catalogue_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            schedule_name TEXT NOT NULL,
+            edition TEXT NOT NULL,
+            volume TEXT NOT NULL,
+            chapter TEXT NOT NULL,
+            item_code TEXT NOT NULL,
+            parent_item_code TEXT,
+            description TEXT NOT NULL,
+            original_unit TEXT NOT NULL,
+            canonical_unit TEXT NOT NULL,
+            original_rate TEXT,
+            source_document_name TEXT NOT NULL,
+            source_page INTEGER NOT NULL,
+            verification_status TEXT NOT NULL DEFAULT 'Unverified',
+            reviewer TEXT,
+            verification_date TEXT,
+            is_heading INTEGER NOT NULL DEFAULT 0 CHECK (is_heading IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(schedule_name, edition, item_code)
+        );
+        CREATE INDEX IF NOT EXISTS idx_catalogue_search_code ON catalogue_items(item_code);
+        CREATE INDEX IF NOT EXISTS idx_catalogue_search_description ON catalogue_items(description);
+        CREATE TABLE IF NOT EXISTS catalogue_imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_file_name TEXT NOT NULL,
+            source_checksum TEXT NOT NULL UNIQUE,
+            imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            row_count INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            error_summary TEXT
+        );
+        CREATE TABLE IF NOT EXISTS correction_slips (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slip_reference TEXT NOT NULL,
+            publication_date TEXT NOT NULL,
+            effective_date TEXT NOT NULL,
+            effective_date_source TEXT NOT NULL,
+            item_code TEXT NOT NULL,
+            operation TEXT NOT NULL CHECK (operation IN ('add', 'amend', 'delete')),
+            changed_parent_item_code TEXT,
+            changed_description TEXT,
+            changed_original_unit TEXT,
+            changed_canonical_unit TEXT,
+            changed_rate TEXT,
+            changed_volume TEXT,
+            changed_chapter TEXT,
+            source_document_name TEXT NOT NULL,
+            source_page INTEGER NOT NULL,
+            verification_status TEXT NOT NULL DEFAULT 'Unverified',
+            reviewer TEXT,
+            verification_date TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(slip_reference, item_code, operation)
+        );
+        CREATE INDEX IF NOT EXISTS idx_corrections_item ON correction_slips(item_code, effective_date);
         """
     )
-    connection.execute("PRAGMA user_version = 2")
+    _add_column_if_missing(connection, "boq_items", "catalogue_item_id", "INTEGER")
+    _add_column_if_missing(connection, "boq_items", "catalogue_version_id", "INTEGER")
+    _add_column_if_missing(connection, "boq_items", "manual_override_reason", "TEXT")
+    connection.execute("PRAGMA user_version = 3")
     connection.commit()
+
+
+def _add_column_if_missing(
+    connection: sqlite3.Connection, table: str, column: str, definition: str
+) -> None:
+    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

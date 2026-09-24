@@ -10,9 +10,9 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMessageBox,
     QPushButton,
     QTableWidget,
@@ -34,8 +34,12 @@ from estimate_app.database.boq import (
     Measurement,
     UNVERIFIED_MANUAL_RATE,
     UNVERIFIED_STATUS,
-    UnitChangeRequiresResolution,
 )
+from estimate_app.database.catalogue import (
+    MANUAL_OVERRIDE,
+    CatalogueRepository,
+)
+from estimate_app.interface.catalogue_dialog import CatalogueDialog
 
 
 TYPE_LABELS = {
@@ -48,11 +52,16 @@ TYPE_LABELS = {
 
 
 class BOQEditor(QWidget):
-    def __init__(self, repository: BOQRepository) -> None:
+    def __init__(self, repository: BOQRepository, catalogue_repository: CatalogueRepository) -> None:
         super().__init__()
         self.repository = repository
+        self.catalogue_repository = catalogue_repository
         self.current_project_id: int | None = None
         self.current_item_id: int | None = None
+        self.current_cutoff_date: str | None = None
+        self.selected_catalogue_id: int | None = None
+        self.selected_catalogue_version_id: int | None = None
+        self.selected_catalogue_rate: Decimal | None = None
         self._build_ui()
         self._set_enabled(False)
 
@@ -69,13 +78,17 @@ class BOQEditor(QWidget):
         self.delete_item_button = QPushButton("Delete Item")
         self.up_button = QPushButton("Move Up")
         self.down_button = QPushButton("Move Down")
+        self.select_catalogue_button = QPushButton("Select verified DSR item")
+        self.review_updates_button = QPushButton("Review rate updates")
         self.new_item_button.clicked.connect(self._new_item)
         self.save_item_button.clicked.connect(self._save_item)
         self.delete_item_button.clicked.connect(self._delete_item)
         self.up_button.clicked.connect(lambda: self._move_item(-1))
         self.down_button.clicked.connect(lambda: self._move_item(1))
+        self.select_catalogue_button.clicked.connect(self._select_catalogue)
+        self.review_updates_button.clicked.connect(self._review_rate_updates)
         item_buttons = QHBoxLayout()
-        for button in (self.new_item_button, self.save_item_button, self.delete_item_button, self.up_button, self.down_button):
+        for button in (self.new_item_button, self.save_item_button, self.delete_item_button, self.up_button, self.down_button, self.select_catalogue_button, self.review_updates_button):
             item_buttons.addWidget(button)
 
         self.work_section = QLineEdit()
@@ -164,15 +177,16 @@ class BOQEditor(QWidget):
                 field.stateChanged.connect(self._preview_measurement)
         self._update_dimension_inputs()
 
-    def set_project(self, project_id: int | None) -> None:
+    def set_project(self, project_id: int | None, cutoff_date: str | None = None) -> None:
         self.current_project_id = project_id
+        self.current_cutoff_date = cutoff_date
         self.current_item_id = None
         self._set_enabled(project_id is not None)
         self._load_items()
         self._new_item()
 
     def _set_enabled(self, enabled: bool) -> None:
-        for widget in (self.item_table, self.new_item_button, self.save_item_button, self.delete_item_button, self.up_button, self.down_button, self.measurement_table, self.new_measurement_button, self.save_measurement_button, self.delete_measurement_button):
+        for widget in (self.item_table, self.new_item_button, self.save_item_button, self.delete_item_button, self.up_button, self.down_button, self.select_catalogue_button, self.review_updates_button, self.measurement_table, self.new_measurement_button, self.save_measurement_button, self.delete_measurement_button):
             widget.setEnabled(enabled)
 
     def _load_items(self) -> None:
@@ -210,6 +224,9 @@ class BOQEditor(QWidget):
         self.rate.setText("" if item.rate is None else format(item.rate, "f"))
         self.rate_source.setText(item.rate_source)
         self.verification_status.setText(item.verification_status)
+        self.selected_catalogue_id = item.catalogue_item_id
+        self.selected_catalogue_version_id = item.catalogue_version_id
+        self.selected_catalogue_rate = item.rate if item.catalogue_item_id is not None else None
         self._load_measurements()
 
     def _new_item(self) -> None:
@@ -218,6 +235,9 @@ class BOQEditor(QWidget):
             field.clear()
         self.rate_source.setText(UNVERIFIED_MANUAL_RATE)
         self.verification_status.setText(UNVERIFIED_STATUS)
+        self.selected_catalogue_id = None
+        self.selected_catalogue_version_id = None
+        self.selected_catalogue_rate = None
         self.item_table.clearSelection()
         self._clear_measurement_form()
         self._load_measurements()
@@ -243,6 +263,20 @@ class BOQEditor(QWidget):
             return
         resolve_unit_change = False
         existing = self.repository.get_item(self.current_item_id) if self.current_item_id else None
+        catalogue_item_id = existing.catalogue_item_id if existing else self.selected_catalogue_id
+        catalogue_version_id = existing.catalogue_version_id if existing else self.selected_catalogue_version_id
+        manual_override_reason = existing.manual_override_reason if existing else None
+        verification_status = self.verification_status.text()
+        rate_source = self.rate_source.text()
+        original_catalogue_rate = existing.rate if existing and existing.catalogue_item_id is not None else self.selected_catalogue_rate
+        if original_catalogue_rate is not None and rate != original_catalogue_rate:
+            reason, accepted = QInputDialog.getText(self, "Manual override reason", "Why is the verified DSR rate being changed?")
+            if not accepted or not reason.strip():
+                QMessageBox.warning(self, "Manual override reason required", "A reason is required for a manual rate override.")
+                return
+            verification_status = MANUAL_OVERRIDE
+            rate_source = MANUAL_OVERRIDE
+            manual_override_reason = reason.strip()
         if existing and existing.unit != self.unit.text().strip() and self.repository.list_measurements(existing.id):
             answer = QMessageBox.question(self, "Resolve unit change", "Changing the unit will delete existing measurements. Continue?")
             if answer != QMessageBox.StandardButton.Yes:
@@ -260,8 +294,11 @@ class BOQEditor(QWidget):
                     required["Unit"],
                     self._current_type(self.quantity_type),
                     rate,
-                    self.rate_source.text(),
-                    self.verification_status.text(),
+                    rate_source,
+                    verification_status,
+                    catalogue_item_id,
+                    catalogue_version_id,
+                    manual_override_reason,
                 ),
                 resolve_unit_change=resolve_unit_change,
             )
@@ -271,6 +308,68 @@ class BOQEditor(QWidget):
         self.current_item_id = item.id
         self._load_items()
         self._select_item(item.id)
+
+    def _select_catalogue(self) -> None:
+        dialog = CatalogueDialog(self.catalogue_repository, self.current_cutoff_date, self)
+        if dialog.exec() != dialog.DialogCode.Accepted or dialog.selected is None:
+            return
+        resolved = dialog.selected
+        item = resolved.item
+        self.current_item_id = self.current_item_id
+        self.work_section.setText(item.chapter)
+        self.dsr_item_code.setText(item.item_code)
+        self.description.setText(item.description)
+        self.unit.setText(item.canonical_unit)
+        self.quantity_type.setCurrentIndex(self.quantity_type.findData(self._quantity_type_for_unit(item.canonical_unit)))
+        self.rate.setText(format(item.rate, "f") if item.rate is not None else "")
+        self.rate_source.setText(f"{item.source_document_name}, p. {item.source_page}")
+        self.verification_status.setText(item.verification_status)
+        self.selected_catalogue_id = item.id
+        self.selected_catalogue_version_id = resolved.applied_corrections[-1].id if resolved.applied_corrections else item.id
+        self.selected_catalogue_rate = item.rate
+
+    def _review_rate_updates(self) -> None:
+        if self.current_item_id is None:
+            QMessageBox.information(self, "Rate updates", "Save or select a BOQ item first.")
+            return
+        item = self.repository.get_item(self.current_item_id)
+        if item is None or item.catalogue_item_id is None:
+            QMessageBox.information(self, "Rate updates", "This item has no catalogue snapshot to review.")
+            return
+        catalogue = self.catalogue_repository.get_item(item.catalogue_item_id)
+        if catalogue is None:
+            QMessageBox.warning(self, "Rate updates", "The original catalogue record is unavailable.")
+            return
+        resolved = self.catalogue_repository.resolve_item(catalogue.schedule_name, catalogue.edition, catalogue.item_code, self.current_cutoff_date)
+        changed = resolved.deleted or any((resolved.item.description, resolved.item.canonical_unit, resolved.item.rate) != (item.description, item.unit, item.rate))
+        if not changed:
+            QMessageBox.information(self, "Rate updates", "No applicable verified rate update was found.")
+            return
+        details = "The catalogue differs from this BOQ snapshot. Apply the reviewed update?"
+        if resolved.deleted:
+            details = "The catalogue item is deleted by an applicable correction. Do not apply this update automatically."
+        if resolved.deleted or QMessageBox.question(self, "Review rate updates", details) != QMessageBox.StandardButton.Yes:
+            return
+        self.description.setText(resolved.item.description)
+        self.unit.setText(resolved.item.canonical_unit)
+        self.rate.setText(format(resolved.item.rate, "f") if resolved.item.rate is not None else "")
+        self.rate_source.setText(f"{resolved.item.source_document_name}, p. {resolved.item.source_page}")
+        self.selected_catalogue_rate = resolved.item.rate
+        self.selected_catalogue_version_id = resolved.applied_corrections[-1].id if resolved.applied_corrections else resolved.item.id
+        self._save_item()
+
+    @staticmethod
+    def _quantity_type_for_unit(unit: str):
+        lowered = unit.lower()
+        if lowered in {"cum", "m3", "m³"}:
+            return MeasurementType.VOLUME
+        if lowered in {"sqm", "m2", "m²"}:
+            return MeasurementType.AREA
+        if lowered in {"m", "rm"}:
+            return MeasurementType.LENGTH
+        if lowered in {"each", "no", "nos"}:
+            return MeasurementType.COUNT
+        return MeasurementType.DIRECT
 
     def _delete_item(self) -> None:
         if self.current_item_id is None:

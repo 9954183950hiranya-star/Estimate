@@ -37,6 +37,9 @@ class BOQItem:
     rate: Decimal | None = None
     rate_source: str = UNVERIFIED_MANUAL_RATE
     verification_status: str = UNVERIFIED_STATUS
+    catalogue_item_id: int | None = None
+    catalogue_version_id: int | None = None
+    manual_override_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +105,9 @@ class BOQRepository:
             decimal_to_text(decimal_from_text(item.rate, "Rate")),
             item.rate_source,
             item.verification_status,
+            item.catalogue_item_id,
+            item.catalogue_version_id,
+            item.manual_override_reason,
         )
         if item.id is None:
             cursor = self.connection.execute(
@@ -109,8 +115,9 @@ class BOQRepository:
                 INSERT INTO boq_items (
                     project_id, serial_number, work_section, dsr_item_code,
                     description, unit, quantity_type, rate, rate_source,
-                    verification_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    verification_status, catalogue_item_id, catalogue_version_id,
+                    manual_override_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values,
             )
@@ -122,7 +129,9 @@ class BOQRepository:
                 SET project_id = ?, serial_number = ?, work_section = ?,
                     dsr_item_code = ?, description = ?, unit = ?,
                     quantity_type = ?, rate = ?, rate_source = ?,
-                    verification_status = ?, updated_at = CURRENT_TIMESTAMP
+                    verification_status = ?, catalogue_item_id = ?,
+                    catalogue_version_id = ?, manual_override_reason = ?,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
                 values + (item.id,),
@@ -245,6 +254,9 @@ class BOQRepository:
             rate=decimal_from_text(row["rate"], "Rate"),
             rate_source=row["rate_source"],
             verification_status=row["verification_status"],
+            catalogue_item_id=row["catalogue_item_id"],
+            catalogue_version_id=row["catalogue_version_id"],
+            manual_override_reason=row["manual_override_reason"],
         )
 
     @staticmethod
