@@ -8,7 +8,7 @@ from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from estimate_app.database.connection import connect, initialise
-from estimate_app.database.projects import ProjectRepository
+from estimate_app.database.projects import Project, ProjectRepository
 from estimate_app.interface.main_window import MainWindow
 
 
@@ -115,3 +115,42 @@ def test_database_error_is_reported(
 
     assert messages
     assert "Project could not be saved" in messages[0]
+
+
+def test_boq_screen_saves_measurements_and_recalculates(
+    window: tuple[MainWindow, sqlite3.Connection]
+) -> None:
+    main_window, connection = window
+    project = ProjectRepository(connection).save(
+        Project(None, "Synthetic BOQ Project", "TEST-BOQ", "Delhi", "Test Department", "2026-09-24", "2026-08-31")
+    )
+    editor = main_window.boq_editor
+    editor.set_project(project.id)
+    editor.work_section.setText("Concrete")
+    editor.dsr_item_code.setText("TEST-RATE-001")
+    editor.description.setText("Synthetic test concrete")
+    editor.unit.setText("cum")
+    editor.rate.setText("100.00")
+    editor._save_item()
+
+    editor.particulars.setText("Foundation addition")
+    editor.repetitions.setText("1")
+    editor.number.setText("4")
+    editor.length.setText("2")
+    editor.breadth.setText("1.5")
+    editor.height_depth.setText("0.5")
+    editor._save_measurement()
+    editor._new_measurement()
+    editor.particulars.setText("Opening deduction")
+    editor.is_deduction.setChecked(True)
+    editor.repetitions.setText("1")
+    editor.number.setText("2")
+    editor.length.setText("0.5")
+    editor.breadth.setText("0.5")
+    editor.height_depth.setText("0.5")
+    editor._save_measurement()
+
+    assert editor.measurement_table.rowCount() == 2
+    assert "Net 5.750" in editor.summary_label.text()
+    assert "₹575.00" in editor.summary_label.text()
+    assert connection.execute("SELECT COUNT(*) FROM measurements").fetchone()[0] == 2

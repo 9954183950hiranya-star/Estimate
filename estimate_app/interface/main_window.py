@@ -14,18 +14,22 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
     QLineEdit,
 )
 
 from estimate_app.database.projects import Project, ProjectRepository
+from estimate_app.database.boq import BOQRepository
+from estimate_app.interface.boq_editor import BOQEditor
 
 
 class MainWindow(QMainWindow):
     def __init__(self, repository: ProjectRepository) -> None:
         super().__init__()
         self.repository = repository
+        self.boq_repository = BOQRepository(repository.connection)
         self.current_project_id: int | None = None
         self.setWindowTitle("Building Estimate — CPWD DSR 2023")
         self.resize(1000, 620)
@@ -67,9 +71,13 @@ class MainWindow(QMainWindow):
 
         form_panel = QWidget()
         form_panel.setLayout(form)
+        self.boq_editor = BOQEditor(self.boq_repository)
+        tabs = QTabWidget()
+        tabs.addTab(form_panel, "Project")
+        tabs.addTab(self.boq_editor, "BOQ and measurements")
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(list_panel)
-        splitter.addWidget(form_panel)
+        splitter.addWidget(tabs)
         splitter.setStretchFactor(1, 1)
         self.setCentralWidget(splitter)
 
@@ -101,6 +109,7 @@ class MainWindow(QMainWindow):
         self.estimate_date.setDate(today)
         self.cutoff_date.setDate(today)
         self.project_list.clearSelection()
+        self.boq_editor.set_project(None)
         self.statusBar().showMessage("New project")
 
     def _open_project(self, item: QListWidgetItem | None, _: QListWidgetItem | None) -> None:
@@ -117,6 +126,7 @@ class MainWindow(QMainWindow):
         self.client_department.setText(project.client_department)
         self.estimate_date.setDate(QDate.fromString(project.estimate_date, Qt.DateFormat.ISODate))
         self.cutoff_date.setDate(QDate.fromString(project.correction_slip_cutoff_date, Qt.DateFormat.ISODate))
+        self.boq_editor.set_project(project.id)
 
     def _save_project(self) -> None:
         fields = {
@@ -157,6 +167,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Database error", f"Project could not be saved: {error}")
             return
         self.current_project_id = project.id
+        self.boq_editor.set_project(project.id)
         self._load_projects()
         self._select_project(project.id)
         self.statusBar().showMessage("Project saved")

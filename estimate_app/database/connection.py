@@ -50,6 +50,41 @@ def initialise(connection: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS boq_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            serial_number INTEGER NOT NULL,
+            work_section TEXT NOT NULL,
+            dsr_item_code TEXT NOT NULL,
+            description TEXT NOT NULL,
+            unit TEXT NOT NULL,
+            quantity_type TEXT NOT NULL,
+            rate TEXT,
+            rate_source TEXT NOT NULL,
+            verification_status TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, serial_number)
+        );
+        CREATE TABLE IF NOT EXISTS measurements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            boq_item_id INTEGER NOT NULL REFERENCES boq_items(id) ON DELETE CASCADE,
+            particulars TEXT NOT NULL,
+            is_deduction INTEGER NOT NULL DEFAULT 0 CHECK (is_deduction IN (0, 1)),
+            measurement_type TEXT NOT NULL,
+            repetitions TEXT,
+            number TEXT,
+            length TEXT,
+            breadth TEXT,
+            height_depth TEXT,
+            direct_quantity TEXT,
+            remarks TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_boq_items_project ON boq_items(project_id, serial_number);
+        CREATE INDEX IF NOT EXISTS idx_measurements_item ON measurements(boq_item_id, id);
         """
     )
+    connection.execute("PRAGMA user_version = 2")
     connection.commit()

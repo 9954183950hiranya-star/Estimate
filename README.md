@@ -2,9 +2,29 @@
 
 Offline Windows desktop foundation for preparing building civil engineering estimates.
 
-## Scope of this step
+## Current scope
 
-The application currently provides a PySide6 window for creating, saving, and reopening project metadata. It stores SQLite data in the per-user application-data directory, not in the source or installation directory. Detailed measurements, rate schedules, estimate revisions, and a separate materials abstract are intentionally deferred.
+The application provides a PySide6 window for creating, saving, and reopening building projects. The `BOQ and measurements` tab supports BOQ item editing, manual development rates, reordering, deletion, and detailed volume, area, length, count, and direct-quantity measurements. It stores SQLite data in the per-user application-data directory, not in the source or installation directory.
+
+Manual rates are labelled `Unverified manual rate`. This step contains no CPWD DSR catalogue or invented CPWD rates. Rate import, estimate revisions, materials abstracts, taxes, contingencies, and report export are deferred.
+
+## BOQ calculation rules
+
+Dimensional inputs use metres. A measurement's quantity is calculated as:
+
+- Volume: repetitions x number x length x breadth x height/depth
+- Area: repetitions x number x length x breadth
+- Length: repetitions x number x length
+- Count: repetitions x number
+- Direct quantity: the entered quantity in the BOQ item's unit
+
+All inputs are stored and calculated as `Decimal` text values. Full precision is retained until display; quantities display to 3 decimal places and money to 2 decimal places using `ROUND_HALF_UP`. Amounts use the displayed, rounded BOQ quantity. Additions and deductions are shown separately. Missing measurements, missing rates, and explicit zero rates remain distinct; negative net quantities are flagged and cannot be finalised.
+
+Changing a unit after measurements exist requires explicit confirmation and clears those measurements only after confirmation.
+
+## Using the BOQ editor
+
+Open or create a project, then select the `BOQ and measurements` tab. Create a BOQ item with its work section, text DSR code, description, unit, quantity type, and optional development rate. Select the item to add or edit measurements. Select an item row to reopen its saved measurements. The DSR catalogue and verified CPWD source data are not part of this step.
 
 The rate and data rules for future work are recorded in [docs/PROJECT_INSTRUCTIONS.md](docs/PROJECT_INSTRUCTIONS.md).
 
