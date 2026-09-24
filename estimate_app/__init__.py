@@ -1,0 +1,1 @@
+"""Building Estimate desktop application."""
