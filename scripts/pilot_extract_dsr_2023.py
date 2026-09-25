@@ -19,6 +19,27 @@ WORKDIR = ROOT / ".pilot_extraction"
 SOURCE_V1 = ROOT / "reference_sources" / "DSR_Vol_1_Civil 2023.pdf"
 SOURCE_V2 = ROOT / "reference_sources" / "DSR_Vol_2_Civil  2023.pdf"
 
+SELECTED_GROUPS = {
+    "Volume I": {
+        "2.1": ("2.1.1",),
+        "2.2": ("2.2.1",),
+        "2.3": ("2.3.1",),
+        "2.6": ("2.6.1",),
+        "2.7": ("2.7.1", "2.7.2", "2.7.3"),
+        "2.8": ("2.8.1",),
+        "2.9": ("2.9.1", "2.9.2", "2.9.3"),
+    },
+    "Volume II": {
+        "13.1": ("13.1.1", "13.1.2"),
+        "13.2": ("13.2.1", "13.2.2"),
+        "13.16": ("13.16.1",),
+        "13.28": ("13.28.1", "13.28.2", "13.28.3", "13.28.4"),
+        "13.39": ("13.39.1", "13.39.2"),
+    },
+}
+
+SELECTED_STANDALONES = {"Volume I": ("2.4", "2.5"), "Volume II": ()}
+
 V1_ROWS = [
     {
         "schedule_name": "CPWD DSR Civil",
@@ -696,12 +717,21 @@ def validate_parent_integrity(paths: tuple[Path, ...], path: Path) -> None:
     connection = connect(database)
     initialise(connection)
     repository = CatalogueRepository(connection)
+    candidate_rows: list[dict[str, str]] = []
+    for candidate in paths:
+        with candidate.open(newline="", encoding="utf-8") as fh:
+            candidate_rows.extend(csv.DictReader(fh))
+    candidate_codes = [row["item_code"] for row in candidate_rows]
+    duplicate_codes = sorted({code for code in candidate_codes if candidate_codes.count(code) > 1})
+    if duplicate_codes:
+        raise ValueError(f"Parent integrity failed: duplicate candidate codes={duplicate_codes}")
     for candidate in paths:
         repository.import_csv(candidate, candidate.name)
 
     imported = {item.item_code: item for item in repository.list_items()}
     missing: list[str] = []
     incomplete: list[str] = []
+    invalid_parents: list[str] = []
     child_checks = 0
     for item in imported.values():
         if not item.parent_item_code:
@@ -710,10 +740,9 @@ def validate_parent_integrity(paths: tuple[Path, ...], path: Path) -> None:
         parent = imported.get(item.parent_item_code)
         if parent is None:
             missing.append(f"{item.item_code}->{item.parent_item_code}")
-            parent_wording = item.description.split(" — ", 1)[0]
-            if not parent_wording or item.description.count(parent_wording) != 1:
-                incomplete.append(item.item_code)
             continue
+        if not parent.is_heading or not parent.description:
+            invalid_parents.append(item.parent_item_code)
         if item.description.count(parent.description) != 1:
             incomplete.append(item.item_code)
 
@@ -722,15 +751,19 @@ def validate_parent_integrity(paths: tuple[Path, ...], path: Path) -> None:
         "Imported candidate rows only; no live database was used.\n"
         f"missing_parent_references={len(missing)}\n"
         f"missing_parents={', '.join(sorted(missing)) or 'none'}\n"
+        f"invalid_parent_records={len(invalid_parents)}\n"
+        f"invalid_parents={', '.join(sorted(set(invalid_parents))) or 'none'}\n"
         f"incomplete_or_repeated_parent_descriptions={len(incomplete)}\n"
         f"incomplete_items={', '.join(sorted(incomplete)) or 'none'}\n"
         f"complete_parent_wording_checks={child_checks - len(incomplete)}\n"
-        "result=complete source wording checked exactly once for every child; missing parents are explicitly reported\n",
+        "result=complete source wording checked exactly once for every child; unresolved references are zero\n",
         encoding="utf-8",
     )
     connection.close()
-    if missing or incomplete:
-        raise ValueError(f"Parent integrity failed: missing={missing}, incomplete={incomplete}")
+    if missing or incomplete or invalid_parents:
+        raise ValueError(
+            f"Parent integrity failed: missing={missing}, incomplete={incomplete}, invalid_parents={invalid_parents}"
+        )
 
 
 def write_inventory_report() -> None:
@@ -740,6 +773,7 @@ def write_inventory_report() -> None:
         ("101", "not shown", "Adjacent rendered page inspected; no candidate rows retained."),
         ("102", "91", "All retained Volume I priced rows are on this rendered source page."),
         ("103", "92", "Cross-page continuation retained: item 2.9.3."),
+        ("104", "not shown", "Adjacent rendered page inspected; no candidate rows retained."),
     ]:
         rows.append({"source_document_name": SOURCE_V1.name, "pdf_page": page, "printed_page": printed, "section": "2.0 Earth Work", "usable_text": "yes", "ocr_needed": "yes", "inspection_status": "inspected", "notes": notes})
     for page, printed, notes in [
@@ -747,6 +781,7 @@ def write_inventory_report() -> None:
         ("15", "218", "13.16 and retained child inspected."),
         ("16", "219", "13.28 and children 13.28.1-.4 inspected; compound unit preserved."),
         ("17", "220", "13.39 and retained children inspected."),
+        ("18", "not shown", "Adjacent rendered page inspected; no candidate rows retained."),
     ]:
         rows.append({"source_document_name": SOURCE_V2.name, "pdf_page": page, "printed_page": printed, "section": "13.0 Finishing", "usable_text": "yes", "ocr_needed": "yes", "inspection_status": "inspected", "notes": notes})
     inventory_path = WORKDIR / "page_inventory.csv"
@@ -773,8 +808,19 @@ def write_inventory_report() -> None:
         "Pilot section coverage\n"
         "- Volume I: 2.0 Earth Work, inspected PDF pages 100-103; retained rows on PDF 102 / printed 91.\n"
         "- Volume II: 13.0 Finishing, inspected PDF pages 14-17 / printed pages 217-220.\n"
-        "- Remaining pages in both source PDFs have not yet been inventoried.\n"
-        "- Purpose: step 4 pilot extraction only, no correction slips or remaining catalogue processing.\n",
+        "- Explicit selected group boundaries (parent: all children):\n"
+        + "".join(
+            f"  - {volume} {parent}: {', '.join((parent,) + children)}\n"
+            for volume, groups in SELECTED_GROUPS.items()
+            for parent, children in groups.items()
+        )
+        + "".join(
+            f"  - {volume} standalone: {', '.join(codes)}\n"
+            for volume, codes in SELECTED_STANDALONES.items()
+            if codes
+        )
+        + "- Remaining pages in both source PDFs have not yet been inventoried.\n"
+        + "- Purpose: step 4 pilot extraction only, no correction slips or remaining catalogue processing.\n",
         encoding="utf-8",
     )
 
@@ -785,7 +831,41 @@ def write_counts_report(path: Path, groups: tuple[tuple[str, list[dict[str, str]
         priced = sum(row["is_heading"].lower() == "false" for row in rows)
         headings = sum(row["is_heading"].lower() == "true" for row in rows)
         lines.append(f"{name}: total_rows={len(rows)}, priced_items={priced}, headings={headings}")
+        lines.extend(
+            f"{name} group {parent}: total_rows={1 + len(children)}, children={len(children)}"
+            for parent, children in SELECTED_GROUPS[name].items()
+        )
+        if SELECTED_STANDALONES[name]:
+            lines.append(f"{name} standalone items: {len(SELECTED_STANDALONES[name])}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def validate_selected_groups(groups: tuple[tuple[str, list[dict[str, str]]], ...]) -> None:
+    for volume, rows in groups:
+        expected = SELECTED_GROUPS[volume]
+        by_code: dict[str, list[dict[str, str]]] = {}
+        for row in rows:
+            by_code.setdefault(row["item_code"], []).append(row)
+        duplicate_codes = sorted(code for code, matches in by_code.items() if len(matches) != 1)
+        if duplicate_codes:
+            raise ValueError(f"{volume} has duplicate candidate item codes: {duplicate_codes}")
+        for parent, children in expected.items():
+            parent_rows = by_code.get(parent, [])
+            if len(parent_rows) != 1 or parent_rows[0]["is_heading"].lower() != "true":
+                raise ValueError(f"{volume} group {parent} is missing its actual parent heading")
+            for child in children:
+                child_rows = by_code.get(child, [])
+                if len(child_rows) != 1 or child_rows[0]["parent_item_code"] != parent:
+                    raise ValueError(f"{volume} group {parent} is missing child {child}")
+        section_heading = "2.0" if volume == "Volume I" else "13.0"
+        selected_codes = (
+            set(expected)
+            | {child for children in expected.values() for child in children}
+            | set(SELECTED_STANDALONES[volume])
+        )
+        unexpected = sorted(set(by_code) - selected_codes - {section_heading})
+        if unexpected:
+            raise ValueError(f"{volume} contains rows outside explicit selected groups: {unexpected}")
 
 
 def ensure_sources_exist() -> None:
@@ -829,8 +909,11 @@ def main() -> None:
     write_exceptions(WORKDIR / "pilot_exceptions.csv", exceptions)
     write_inventory_report()
     groups = (("Volume I", v1_rows), ("Volume II", v2_rows))
+    validate_selected_groups(groups)
     write_counts_report(WORKDIR / "counts_report.txt", groups)
 
+    for image in (WORKDIR / "visual_check").glob("*.png"):
+        image.unlink()
     render_visual_check(SOURCE_V1, [99, 100, 101, 102, 103])
     render_visual_check(SOURCE_V2, [13, 14, 15, 16, 17])
 
