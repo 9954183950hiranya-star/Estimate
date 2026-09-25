@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
 )
 
+from estimate_app.interface.report_panel import ReportPanel
 from estimate_app.database.projects import Project, ProjectRepository
 from estimate_app.database.boq import BOQRepository
 from estimate_app.database.catalogue import CatalogueRepository
@@ -81,9 +82,11 @@ class MainWindow(QMainWindow):
         form_panel = QWidget()
         form_panel.setLayout(form)
         self.boq_editor = BOQEditor(self.boq_repository, self.catalogue_repository)
+        self.report_panel = ReportPanel(self.repository.connection)
         tabs = QTabWidget()
         tabs.addTab(form_panel, "Project")
         tabs.addTab(self.boq_editor, "BOQ and measurements")
+        tabs.addTab(self.report_panel, "Reports")
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(list_panel)
         splitter.addWidget(tabs)
@@ -119,6 +122,7 @@ class MainWindow(QMainWindow):
         self.cutoff_date.setDate(today)
         self.project_list.clearSelection()
         self.boq_editor.set_project(None)
+        self.report_panel.set_project(None)
         self.statusBar().showMessage("New project")
 
     def _open_project(self, item: QListWidgetItem | None, _: QListWidgetItem | None) -> None:
@@ -136,6 +140,7 @@ class MainWindow(QMainWindow):
         self.estimate_date.setDate(QDate.fromString(project.estimate_date, Qt.DateFormat.ISODate))
         self.cutoff_date.setDate(QDate.fromString(project.correction_slip_cutoff_date, Qt.DateFormat.ISODate))
         self.boq_editor.set_project(project.id, project.correction_slip_cutoff_date)
+        self.report_panel.set_project(project.id)
 
     def _save_project(self) -> None:
         fields = {
