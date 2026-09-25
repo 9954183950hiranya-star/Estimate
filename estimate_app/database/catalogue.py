@@ -729,12 +729,14 @@ class CatalogueRepository:
         return rows
 
     def _parse_row(self, row: dict[str, str], row_number: int, raw_rows: list[dict[str, str]]) -> CatalogueItem:
-        required = ["schedule_name", "edition", "volume", "chapter", "item_code", "description", "original_unit", "canonical_unit", "source_document_name", "source_page"]
+        is_heading = self._parse_bool(row.get("is_heading", ""), "is_heading")
+        required = ["schedule_name", "edition", "volume", "chapter", "item_code", "description", "source_document_name", "source_page"]
+        if not is_heading:
+            required.extend(["original_unit", "canonical_unit"])
         missing = [field for field in required if not row.get(field, "").strip()]
         if missing:
             raise ValueError("missing " + ", ".join(missing))
         rate = decimal_from_text(row.get("rate", "").strip(), "rate")
-        is_heading = self._parse_bool(row.get("is_heading", ""), "is_heading")
         if not is_heading and rate is None:
             raise ValueError("priced items require a rate")
         try:

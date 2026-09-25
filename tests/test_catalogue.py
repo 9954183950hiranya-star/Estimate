@@ -84,6 +84,21 @@ def test_import_parent_inheritance_is_unverified_and_repeat_is_safe(tmp_path: Pa
     assert blank_catalogue_template().splitlines()[0].split(",") == list(CATALOGUE_HEADERS)
 
 
+def test_heading_rows_without_units_or_rates_are_valid(tmp_path: Path) -> None:
+    repository = make_repository(tmp_path)
+    content = catalogue_csv(
+        row("0.1", description="HIRE CHARGES OF PLANTS & MACHINERY", rate="", is_heading="true", original_unit="", canonical_unit=""),
+        row("0001", parent_item_code="0.1", description="Hire charges of Coaltar Boiler 900 to 1400 litres", rate="900.00", original_unit="day", canonical_unit="day"),
+    )
+
+    preview = repository.preview_csv(io.StringIO(content), "synthetic-heading.csv")
+
+    assert preview.errors == ()
+    assert preview.rows[0].is_heading is True
+    assert preview.rows[0].original_unit == ""
+    assert preview.rows[0].canonical_unit == ""
+
+
 def test_invalid_import_rolls_back_all_rows_and_reports_row_errors(tmp_path: Path) -> None:
     repository = make_repository(tmp_path)
     content = catalogue_csv(row("2.1"), row("2.2", rate="not-a-rate"))

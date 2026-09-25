@@ -18,3 +18,8 @@ dist/
 *.sqlite3-wal
 test-results/
 reference_documents/
+
+/reference_sources/
+.pdf_diagnostics/
+.ocr_tmp/
+.pilot_extraction/
