@@ -95,6 +95,7 @@ class BOQEditor(QWidget):
         self.dsr_item_code = QLineEdit()
         self.description = QLineEdit()
         self.unit = QLineEdit()
+        self.unit.textChanged.connect(self._apply_quantity_type_policy)
         self.quantity_type = QComboBox()
         for measurement_type in MeasurementType:
             self.quantity_type.addItem(TYPE_LABELS[measurement_type], measurement_type)
@@ -222,6 +223,7 @@ class BOQEditor(QWidget):
         self.description.setText(item.description)
         self.unit.setText(item.unit)
         self.quantity_type.setCurrentIndex(self.quantity_type.findData(item.quantity_type))
+        self._apply_quantity_type_policy()
         self.rate.setText("" if item.rate is None else format(item.rate, "f"))
         self.rate_source.setText(item.rate_source)
         self.verification_status.setText(item.verification_status)
@@ -322,6 +324,7 @@ class BOQEditor(QWidget):
         self.description.setText(item.description)
         self.unit.setText(item.canonical_unit)
         self.quantity_type.setCurrentIndex(self.quantity_type.findData(self._quantity_type_for_unit(item.canonical_unit)))
+        self._apply_quantity_type_policy()
         self.rate.setText(format(item.rate, "f") if item.rate is not None else "")
         self.rate_source.setText(f"{item.source_document_name}, p. {item.source_page}")
         self.verification_status.setText(item.verification_status)
@@ -371,6 +374,15 @@ class BOQEditor(QWidget):
         if lowered in {"each", "no", "nos"}:
             return MeasurementType.COUNT
         return MeasurementType.DIRECT
+
+    def _apply_quantity_type_policy(self) -> None:
+        unsupported_compound_unit = self.unit.text().strip().lower() == "cm per metre"
+        for index in range(self.quantity_type.count()):
+            item = self.quantity_type.model().item(index)
+            measurement_type = self.quantity_type.itemData(index)
+            item.setEnabled(not unsupported_compound_unit or measurement_type == MeasurementType.DIRECT.value)
+        if unsupported_compound_unit:
+            self.quantity_type.setCurrentIndex(self.quantity_type.findData(MeasurementType.DIRECT))
 
     def _delete_item(self) -> None:
         if self.current_item_id is None:

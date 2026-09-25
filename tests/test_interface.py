@@ -7,6 +7,7 @@ import pytest
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from estimate_app.calculation.decimal_policy import MeasurementType
 from estimate_app.database.connection import connect, initialise
 from estimate_app.database.projects import Project, ProjectRepository
 from estimate_app.interface.main_window import MainWindow
@@ -154,3 +155,14 @@ def test_boq_screen_saves_measurements_and_recalculates(
     assert "Net 5.750" in editor.summary_label.text()
     assert "₹575.00" in editor.summary_label.text()
     assert connection.execute("SELECT COUNT(*) FROM measurements").fetchone()[0] == 2
+
+
+def test_compound_unit_blocks_incompatible_measurement_modes(window: tuple[MainWindow, sqlite3.Connection]) -> None:
+    main_window, _ = window
+    editor = main_window.boq_editor
+    editor.unit.setText("cm per metre")
+
+    assert editor.quantity_type.currentData() == MeasurementType.DIRECT.value
+    for index in range(editor.quantity_type.count()):
+        measurement_type = editor.quantity_type.itemData(index)
+        assert editor.quantity_type.model().item(index).isEnabled() == (measurement_type == MeasurementType.DIRECT.value)
