@@ -89,38 +89,74 @@ def build_report(connection, project_id, options):
 DETAIL_HEADERS=['Particulars','Description','Repetitions','Number','Length (m)','Breadth (m)','Height/depth (m)','Unit / mode','Quantity','Rate (Rs)','Amount / remarks']
 
 def report_html(report):
-    def table(rows, headers=None):
-        head='<tr>'+''.join('<th>'+escape(str(v))+'</th>' for v in headers)+'</tr>' if headers else ''
-        return '<table border="1" cellspacing="0" cellpadding="4">'+head+''.join('<tr>'+''.join('<td>'+escape('' if v is None else str(v))+'</td>' for v in row)+'</tr>' for row in rows)+'</table>'
-    footer='<p>'+escape(report['words'])+'</p><p>Prepared by: '+escape(' / '.join(report['prepared']))+'</p>'
-    return '<html><head><style>body {font-family: Arial; font-size:9pt;} th {background:#eeeeee;} table {width:100%;} h1 {font-size:15pt;}</style></head><body><h1>DRAFT — DETAILS OF ESTIMATE</h1>'+table(report['metadata'])+table(report['detail'],DETAIL_HEADERS)+table(report['totals'])+footer+'<h1 style="page-break-before:always">DRAFT — ABSTRACT OF COST</h1>'+table(report['metadata'])+table(report['groups'],['Work component','Amount (Rs)'])+table(report['totals'])+footer+'<h1 style="page-break-before:always">Rate sources and review status</h1>'+table(report['provenance'],['Item','Code','Source','Status','Review','Override reason'])+'</body></html>'
+    def esc(v): return escape('' if v is None else str(v))
+    def td(v, span=1): return '<td colspan="%s">%s</td>' % (span,esc(v))
+    def start(): return '<table width="100%" border="1" cellspacing="0" cellpadding="3">'
+    def meta():
+        return start()+''.join('<tr>'+td(k,4)+td(v,11)+'</tr>' for k,v in report['metadata'] if v)+'</table>'
+    def ending():
+        return ''.join('<tr>'+td(k,14)+td(format(v,'.2f'))+'</tr>' for k,v in report['totals'])+'<tr>'+td(report['words'],15)+'</tr></table><p align="right">Prepared by<br>'+esc(' / '.join(report['prepared']))+'</p>'
+    body=meta()+'<h2 align="center">DETAILS OF ESTIMATE — DRAFT</h2>'+start()
+    body+='<tr>'+td('Particulars of item',11)+td('Unit')+td('Quantity')+td('Rate (Rs)')+td('Amount (Rs)')+'</tr>'
+    for row in report['detail']:
+        if str(row[0]).startswith('Item '):
+            body+='<tr>'+td(str(row[0])+': '+str(row[1]),11)+td(row[7])+td(format(row[8],'.3f'))+td(format(row[9],'.2f'))+td(format(row[10],'.2f'))+'</tr>'
+        elif row[0]=='Net quantity':
+            body+='<tr>'+td('Total quantity',10)+td(format(row[8],'.3f'))+td('',4)+'</tr>'
+        else:
+            factors=[v for v in row[2:7] if v is not None and v!='']
+            working=' × '.join(map(str,factors)) if factors else 'Direct quantity'
+            body+='<tr>'+td(('Less: ' if row[0]=='Less' else '')+str(row[1]),2)+td(working,8)+td(format(abs(row[8]),'.3f'))+td('',4)+'</tr>'
+            if row[10]:body+='<tr>'+td('Remarks: '+str(row[10]),15)+'</tr>'
+    body+=ending()+'<h2 style="page-break-before:always">Rate sources and review status</h2>'+start()
+    for row in [['Item','Code','Source','Status','Review','Reason']]+report['provenance']:body+='<tr>'+''.join(td(v) for v in row)+'</tr>'
+    return '<html><head><style>body {font-family:Arial;font-size:9pt;} h2 {font-size:12pt;}</style></head><body>'+body+'</table></body></html>'
 
-def export_excel(report, path):
-    # Local desktop export dependency, not part of the calculation engine.
+
+def export_excel(report,path):
     import xlsxwriter
-    with xlsxwriter.Workbook(str(path), {'strings_to_formulas':False,'strings_to_urls':False}) as book:
-        text=book.add_format({'font_name':'Arial','font_size':10,'text_wrap':True,'valign':'top','border':1})
-        money=book.add_format({'font_name':'Arial','font_size':10,'num_format':'#,##0.00','border':1,'valign':'top'})
-        quantity=book.add_format({'font_name':'Arial','font_size':10,'num_format':'0.000','border':1,'valign':'top'})
-        bold=book.add_format({'font_name':'Arial','bold':True,'text_wrap':True,'border':1,'bg_color':'#EEEEEE'})
-        for name,headers,rows in [('Detailed estimate',DETAIL_HEADERS,report['detail']),('Abstract of cost',['Work component','Amount (Rs)'],report['groups']),('Rate sources',['Item','Code','Source','Status','Review','Override reason'],report['provenance'])]:
-            sheet=book.add_worksheet(name);sheet.set_landscape();sheet.set_paper(9);sheet.fit_to_pages(1,0)
-            sheet.set_column(0,0,24);sheet.set_column(1,1,65 if name=='Detailed estimate' else 35);sheet.set_column(2,len(headers)-1,14) if len(headers)>2 else None
-            sheet.write(0,0,'DRAFT — '+name.upper(),bold)
-            r=2
-            for label,value in report['metadata']:
-                sheet.write(r,0,label,bold);sheet.write(r,1,value,text);r+=1
-            r+=1;sheet.write_row(r,0,headers,bold);sheet.repeat_rows(r);sheet.freeze_panes(r+1,0);r+=1
-            for row in rows:
-                for col,value in enumerate(row):
-                    if isinstance(value,Decimal):sheet.write_number(r,col,float(value),quantity if name=='Detailed estimate' and col==8 else money)
-                    else:sheet.write(r,col,'' if value is None else value,text)
-                longest=max((len(str(v or '')) for v in row),default=0)
-                sheet.set_row(r,max(30,15*((longest//60)+1)));r+=1
-            if name!='Rate sources':
-                r+=1
-                for label,value in report['totals']:
-                    sheet.write(r,0,label,bold);sheet.write_number(r,1,float(value),money);r+=1
-                sheet.merge_range(r,0,r,max(1,len(headers)-1),report['words'],text);sheet.set_row(r,35)
-                sheet.write(r+2,0,'Prepared by',bold);sheet.write(r+2,1,' / '.join(report['prepared']),text)
-            sheet.set_footer('&CPage &P of &N');sheet.print_area(0,0,r+3,len(headers)-1)
+    with xlsxwriter.Workbook(str(path),{'strings_to_formulas':False,'strings_to_urls':False}) as book:
+        base={'font_name':'Arial','font_size':10,'valign':'top','text_wrap':True}
+        text=book.add_format(base)
+        border=book.add_format(dict(base,border=1))
+        title=book.add_format(dict(base,bold=True,align='center'))
+        money=book.add_format(dict(base,num_format='#,##0.00',align='right'))
+        qty=book.add_format(dict(base,num_format='0.000',align='right'))
+        sheet=book.add_worksheet('Estimate')
+        sheet.set_column('A:A',16);sheet.set_column('B:J',5);sheet.set_column('K:K',11);sheet.set_column('L:L',9);sheet.set_column('M:O',14)
+        sheet.set_landscape();sheet.set_paper(9);sheet.fit_to_pages(1,0);sheet.set_footer('&CPage &P of &N')
+        def merged(r,a,b,value,fmt=text):sheet.merge_range(r,a,r,b,value,fmt)
+        def metadata(r):
+            for k,v in report['metadata']:
+                if v:merged(r,0,5,k);sheet.write(r,6,':');merged(r,7,14,v);sheet.set_row(r,30);r+=1
+            return r
+        def ending(r):
+            for k,v in report['totals']:merged(r,0,13,k);sheet.write_number(r,14,float(v),money);sheet.set_row(r,24);r+=1
+            merged(r,0,14,report['words']);sheet.set_row(r,32);r+=2
+            merged(r,10,14,'Prepared by');r+=1;merged(r,10,14,' / '.join(report['prepared']));sheet.set_row(r,36)
+            return r+2
+        r=metadata(0);merged(r,0,14,'DETAILS OF ESTIMATE — DRAFT',title);r+=1
+        merged(r,0,10,'Particulars of item',border)
+        for col,label in enumerate(['Unit','Quantity','Rate (Rs)','Amount (Rs)'],11):sheet.write(r,col,label,border)
+        r+=1
+        for row in report['detail']:
+            if str(row[0]).startswith('Item '):
+                description=str(row[0])+': '+str(row[1]);merged(r,0,10,description,border)
+                sheet.write(r,11,row[7],border)
+                for col,value in enumerate(row[8:11],12):sheet.write_number(r,col,float(value),qty if col==12 else money)
+                sheet.set_row(r,max(45,15*(len(description)//85+1)))
+            elif row[0]=='Net quantity':merged(r,0,9,'Total quantity');sheet.write_number(r,10,float(row[8]),qty)
+            else:
+                sheet.write(r,0,('Less ' if row[0]=='Less' else '')+str(row[1]),text)
+                factors=[v for v in row[2:7] if v is not None and v!='']
+                for i,value in enumerate(factors):
+                    sheet.write_number(r,1+i*2,float(value),text)
+                    if i<len(factors)-1:sheet.write(r,2+i*2,'×',text)
+                sheet.write_number(r,10,float(abs(row[8])),qty);sheet.set_row(r,30)
+                if row[10]:r+=1;merged(r,0,14,'Remarks: '+str(row[10]));sheet.set_row(r,30)
+            r+=1
+        r=ending(r+1)
+        sheet.print_area(0,0,r,14)
+        source=book.add_worksheet('Rate sources');source.set_column(0,1,14);source.set_column(2,5,35)
+        source.write_row(0,0,['Item','Code','Source','Status','Review','Reason'],border)
+        for i,row in enumerate(report['provenance'],1):source.write_row(i,0,row,text)
