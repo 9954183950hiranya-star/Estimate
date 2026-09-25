@@ -23,3 +23,4 @@ reference_documents/
 .pdf_diagnostics/
 .ocr_tmp/
 .pilot_extraction/
+.chapter_extraction/
