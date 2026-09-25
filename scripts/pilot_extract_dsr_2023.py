@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import os
 import sqlite3
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -413,6 +415,64 @@ V2_ROWS = [
     },
 ]
 
+V1_PARENT_DESCRIPTIONS = {
+    "2.1": "Earth work in surface excavation not exceeding 30 cm in depth but exceeding 1.5 m in width as well as 10 sqm on plan including getting out and disposal of excavated earth upto 50 m and lift upto 1.5 m, as directed by Engineer-in-Charge:",
+    "2.2": "Earth work by mechanical / manual means in rough excavation, banking excavated earth in layers not exceeding 20cm in depth, breaking clods, watering, rolling each layer with ½ tonne roller or wooden or steel rammers, and rolling every 3rd and top-most layer with power roller of minimum 8 tonnes and dressing up in embankments for roads, flood banks, marginal banks and guide banks or filling up ground depressions, lead upto 50 m and for all lift :",
+    "2.3": "Banking excavated earth by mechanical / manual means in layers not exceeding 20 cm in depth, breaking clods, watering, rolling each layer with ½ tonne roller, or wooden or steel rammers, and rolling every 3rd and top-most layer with power roller of minimum 8 tonnes and dressing up, in embankments for roads, flood banks, marginal banks, and guide banks etc., lead upto 50 m and for all lift :",
+    "2.6": "Earth work in excavation by mechanical means (Hydraulic excavator)/ manual means over areas (exceeding 30 cm in depth, 1.5 m in width as well as 10 sqm on plan) including getting out and disposal of excavated earth lead upto 50 m and for all lift, as directed by Engineer-in-charge.",
+    "2.7": "Earth work in excavation by mechanical means (Hydraulic excavator)/ manual means over areas (exceeding 30 cm in depth, 1.5 m in width as well as 10 sqm on plan) including getting out and disposal of excavated earth lead upto 50 m and lift upto 1.5 m, as directed by Engineer-in-charge.",
+    "2.8": "Earth work in excavation by mechanical means (Hydraulic excavator) / manual means in foundation trenches or drains (not exceeding 1.5 m in width or 10 sqm on plan), including dressing of sides and ramming of bottoms, for all lift, including getting out the excavated soil and disposal of surplus excavated soil as directed, within a lead of 50 m.",
+    "2.9": "Excavation work by mechanical means (Hydraulic excavator)/ manual means in foundation trenches or drains (not exceeding 1.5m in width or 10 sqm on plan), including dressing of sides and ramming of bottoms, lift upto 1.5 m, including getting out the excavated soil and disposal of surplus excavated soils as directed, within a lead of 50 m.",
+}
+
+
+def make_heading(base: dict[str, str], item_code: str, description: str, source_page: str) -> dict[str, str]:
+    return {
+        **base,
+        "item_code": item_code,
+        "parent_item_code": "",
+        "description": description,
+        "original_unit": "",
+        "canonical_unit": "",
+        "rate": "",
+        "source_page": source_page,
+        "is_heading": "true",
+    }
+
+
+def bounded_v1_rows() -> list[dict[str, str]]:
+    by_code = {row["item_code"]: dict(row) for row in V1_ROWS}
+    for row in by_code.values():
+        if row["parent_item_code"]:
+            row["description"] = row["description"].split(" — ", 1)[-1]
+    base = by_code["2.0"]
+    parents = {
+        code: make_heading(base, code, description, "102")
+        for code, description in V1_PARENT_DESCRIPTIONS.items()
+    }
+    continuations = [
+        {**by_code["2.7.2"], "item_code": "2.7.3", "description": "Hard rock (blasting prohibited)", "rate": "1432.95", "source_page": "102"},
+        {**by_code["2.9.2"], "item_code": "2.9.3", "description": "Hard rock (blasting prohibited)", "rate": "1523.05", "source_page": "103"},
+    ]
+    by_code.update({row["item_code"]: row for row in continuations})
+    order = ["2.0", "2.1", "2.1.1", "2.2", "2.2.1", "2.3", "2.3.1", "2.4", "2.5", "2.6", "2.6.1", "2.7", "2.7.1", "2.7.2", "2.7.3", "2.8", "2.8.1", "2.9", "2.9.1", "2.9.2", "2.9.3"]
+    return [by_code[code] if code not in parents else parents[code] for code in order]
+
+
+def bounded_v2_rows() -> list[dict[str, str]]:
+    rows = list(V2_ROWS)
+    source = next(row for row in rows if row["item_code"] == "13.28.1")
+    rows.extend(
+        [
+            {**source, "item_code": "13.28.2", "description": "Sunk Band", "rate": "8.20"},
+            {**source, "item_code": "13.28.3", "description": "Raised Band", "rate": "9.35"},
+            {**source, "item_code": "13.28.4", "description": "Moulded Band", "rate": "16.10"},
+        ]
+    )
+    order = ["13.0", "13.1", "13.1.1", "13.1.2", "13.2", "13.2.1", "13.2.2", "13.16", "13.16.1", "13.28", "13.28.1", "13.28.2", "13.28.3", "13.28.4", "13.39", "13.39.1", "13.39.2"]
+    by_code = {row["item_code"]: row for row in rows}
+    return [by_code[code] for code in order]
+
 
 def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
     with path.open("w", newline="", encoding="utf-8") as fh:
@@ -588,6 +648,7 @@ def create_review_zip(path: Path, documentation: Path) -> None:
         WORKDIR / "counts_report.txt",
         WORKDIR / "source_manifest.txt",
         WORKDIR / "parent_integrity_report.txt",
+        WORKDIR / "test_output.txt",
         WORKDIR / "pilot_vol1_candidate_preview_validation.txt",
         WORKDIR / "pilot_vol2_candidate_preview_validation.txt",
         documentation,
@@ -668,6 +729,8 @@ def validate_parent_integrity(paths: tuple[Path, ...], path: Path) -> None:
         encoding="utf-8",
     )
     connection.close()
+    if missing or incomplete:
+        raise ValueError(f"Parent integrity failed: missing={missing}, incomplete={incomplete}")
 
 
 def write_inventory_report() -> None:
@@ -676,13 +739,13 @@ def write_inventory_report() -> None:
         ("100", "not shown", "Section lead-in/cover inspected; no candidate priced rows."),
         ("101", "not shown", "Adjacent rendered page inspected; no candidate rows retained."),
         ("102", "91", "All retained Volume I priced rows are on this rendered source page."),
-        ("103", "92", "Continuation page inspected; no additional pilot rows retained."),
+        ("103", "92", "Cross-page continuation retained: item 2.9.3."),
     ]:
         rows.append({"source_document_name": SOURCE_V1.name, "pdf_page": page, "printed_page": printed, "section": "2.0 Earth Work", "usable_text": "yes", "ocr_needed": "yes", "inspection_status": "inspected", "notes": notes})
     for page, printed, notes in [
         ("14", "217", "13.0, 13.1, 13.2 and retained children inspected."),
         ("15", "218", "13.16 and retained child inspected."),
-        ("16", "219", "13.28 and 13.28.1 inspected; compound unit preserved."),
+        ("16", "219", "13.28 and children 13.28.1-.4 inspected; compound unit preserved."),
         ("17", "220", "13.39 and retained children inspected."),
     ]:
         rows.append({"source_document_name": SOURCE_V2.name, "pdf_page": page, "printed_page": printed, "section": "13.0 Finishing", "usable_text": "yes", "ocr_needed": "yes", "inspection_status": "inspected", "notes": notes})
@@ -749,25 +812,23 @@ def main() -> None:
         encoding="utf-8",
     )
 
+    v1_rows = bounded_v1_rows()
+    v2_rows = bounded_v2_rows()
     v1_path = WORKDIR / "pilot_vol1_candidate.csv"
     v2_path = WORKDIR / "pilot_vol2_candidate.csv"
-    write_csv(v1_path, V1_ROWS)
-    write_csv(v2_path, V2_ROWS)
+    write_csv(v1_path, v1_rows)
+    write_csv(v2_path, v2_rows)
 
-    v1_review = build_review_rows(V1_ROWS, {"2.0": "91", "2.1.1": "91", "2.2.1": "91", "2.3.1": "91", "2.4": "91", "2.5": "91", "2.6.1": "91", "2.7.1": "91", "2.7.2": "91", "2.8.1": "91", "2.9.1": "91", "2.9.2": "91"})
-    v2_review = build_review_rows(V2_ROWS, {"13.0": "217", "13.1": "217", "13.1.1": "217", "13.1.2": "217", "13.2": "217", "13.2.1": "217", "13.2.2": "217", "13.16": "218", "13.16.1": "218", "13.28": "219", "13.28.1": "219", "13.39": "220", "13.39.1": "220", "13.39.2": "220"})
+    v1_review = build_review_rows(v1_rows, {row["item_code"]: ("92" if row["source_page"] == "103" else "91") for row in v1_rows})
+    v2_review = build_review_rows(v2_rows, {row["item_code"]: {"14": "217", "15": "218", "16": "219", "17": "220"}[row["source_page"]] for row in v2_rows})
     write_review(WORKDIR / "pilot_vol1_review.csv", v1_review)
     write_review(WORKDIR / "pilot_vol2_review.csv", v2_review)
-    write_comparison_report(WORKDIR / "pilot_vol1_comparison.csv", V1_ROWS, "Volume 1")
-    write_comparison_report(WORKDIR / "pilot_vol2_comparison.csv", V2_ROWS, "Volume 2")
-    exceptions = [
-        {"source_document_name": SOURCE_V1.name, "item_code": code, "issue": f"Referenced parent {parent} is not included in the bounded candidate CSV; complete parent wording is embedded in the child description.", "source_pdf_page": "102", "printed_page": "91", "action": "Keep unverified and resolve parent modelling before production import."}
-        for code, parent in [("2.1.1", "2.1"), ("2.2.1", "2.2"), ("2.3.1", "2.3"), ("2.6.1", "2.6"), ("2.7.1", "2.7"), ("2.7.2", "2.7"), ("2.8.1", "2.8"), ("2.9.1", "2.9"), ("2.9.2", "2.9")]
-    ]
-    exceptions.append({"source_document_name": SOURCE_V2.name, "item_code": "13.28.1", "issue": "Original unit basis is cm per metre; application has no native compound-unit mode.", "source_pdf_page": "16", "printed_page": "219", "action": "Preserve verbatim and block incompatible measurement modes; do not normalize to m."})
+    write_comparison_report(WORKDIR / "pilot_vol1_comparison.csv", v1_rows, "Volume 1")
+    write_comparison_report(WORKDIR / "pilot_vol2_comparison.csv", v2_rows, "Volume 2")
+    exceptions = [{"source_document_name": SOURCE_V2.name, "item_code": "13.28.1", "issue": "Original unit basis is cm per metre; application has no native compound-unit mode.", "source_pdf_page": "16", "printed_page": "219", "action": "Preserve verbatim and block incompatible measurement modes; do not normalize to m."}]
     write_exceptions(WORKDIR / "pilot_exceptions.csv", exceptions)
     write_inventory_report()
-    groups = (("Volume I", V1_ROWS), ("Volume II", V2_ROWS))
+    groups = (("Volume I", v1_rows), ("Volume II", v2_rows))
     write_counts_report(WORKDIR / "counts_report.txt", groups)
 
     render_visual_check(SOURCE_V1, [99, 100, 101, 102, 103])
@@ -776,6 +837,17 @@ def main() -> None:
     for candidate in (v1_path, v2_path):
         validate_candidates(candidate)
     validate_parent_integrity((v1_path, v2_path), WORKDIR / "parent_integrity_report.txt")
+
+    test = subprocess.run(
+        ["python", "-m", "pytest", "-q"],
+        cwd=ROOT,
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen", "PYTHONPATH": "."},
+        capture_output=True,
+        text=True,
+    )
+    (WORKDIR / "test_output.txt").write_text(test.stdout + test.stderr, encoding="utf-8")
+    if test.returncode:
+        raise RuntimeError("Full regression suite failed; see .pilot_extraction/test_output.txt")
 
     source_after = {source.name: (source.stat().st_size, compute_sha256(source)) for source in sources}
     write_manifest(WORKDIR / "source_manifest.txt", source_before, source_after)
